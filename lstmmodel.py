@@ -24,7 +24,7 @@ class LSTMText2Word(nn.Module):
         # The LSTM takes word embeddings as inputs, and outputs hidden states
         # with dimensionality hidden_dim.
         self.lstm = nn.LSTM(self.embedding_dim, self.hidden_dim, self.lstm_layers, \
-                            bias=False, batch_first=True, dropout=0, bidirectional=False)
+                            bias=False, batch_first=False, dropout=0, bidirectional=False)
 
         # The linear layer that maps from hidden state space to label space
         self.hidden2label = nn.Linear(self.hidden_dim, self.output_dim)
@@ -35,8 +35,11 @@ class LSTMText2Word(nn.Module):
         # Refer to the Pytorch documentation to see exactly
         # why they have this dimensionality.
         # The axes semantics are (num_layers, minibatch_size, hidden_dim)
-        return (autograd.Variable(torch.zeros(1, 1, self.hidden_dim)),
-                autograd.Variable(torch.zeros(1, 1, self.hidden_dim)))
+        
+        return (autograd.Variable(torch.zeros(self.lstm_layers, 1, self.hidden_dim)),
+               autograd.Variable(torch.zeros(self.lstm_layers, 1, self.hidden_dim)))
+        # return (autograd.Variable(torch.zeros(self.lstm_layers, 1, self.hidden_dim).double()), 
+        #        autograd.Variable(torch.zeros(self.lstm_layers, 1, self.hidden_dim).double()))
 
     def forward(self, sequence):
         '''
@@ -47,22 +50,22 @@ class LSTMText2Word(nn.Module):
         label_scores = F.log_softmax(label_space, dim=1)
         return label_scores
         '''
-        print("Print sequence and size:")
-        print(sequence.size())
+        # print("Print sequence and size:")
+        # print(sequence.size())
+        # print(sequence.view(len(sequence), 1, -1).size())
         # lstm_out, self.hidden = self.lstm(sequence.view(len(sequence), 1, -1), self.hidden)
         # -1 means inferring from other dimensions
-        lstm_out, self.hidden = self.lstm(-1, 1, sequence.view(len(sequence)), None)
-        # lstm_out, self.hidden = self.lstm(sequence.view(-1, 1, len(sequence)), None)
-        print("\n\n\nPrint after lstm output:")
-        print(type(lstm_out))
-        print(lstm_out.size())
-        label_space = self.hidden2label(lstm_out.view(-1, len(sequence)))
+        lstm_out, self.hidden = self.lstm(sequence.view(len(sequence), 1, -1))
+        lstm_last = lstm_out[-1, :, :]
+        # print("Print sliced lstm output size:", lstm_last.size())
+        label_space = self.hidden2label(lstm_last.view(1, -1))
+        # print("Size of label space:", label_space.size())
         predicted_label = F.log_softmax(label_space, dim=1)
-        print("Print output:")
-        print(output)
-        print("Print self.hidden:")
-        print(self.hidden)
-        return output  
+        # print("Print predicted label:")
+        # print(predicted_label)
+        # print("Print predicted label size:")
+        # print(predicted_label.size())
+        return predicted_label 
 
 def load_json(label_to_index, path):
     '''
@@ -92,7 +95,7 @@ def text_to_word_list(text):
     '''
     # word_list = tokenizer.tokenize(text)
     word_list = nltk.word_tokenize(text)
-    word_list = [lemmatizer.lemmatize(word.lower()) for word in word_list]
+    word_list = [lemmatizer.lemmatize(word.lower()) if word != 'ni_zhao_bu_dao_de' else word for word in word_list]
     return word_list
 
 def load_glove():
@@ -100,8 +103,11 @@ def load_glove():
     This function loads the pretrained GloVe vectors trained from CommonCrawl.
     '''
     embeddings = {}
-    # p = re.compile('(+|-)*\d+\.\d+')
-    with open(os.path.join('/home/zsong/working/data/glove', 'glove.840B.300d.txt')) as glove:
+    cmc_fname = 'glove.840B.300d.txt'
+    wiki_fname = 'glove.6B.300d.txt'
+    glove_name = 'glove_wiki.txt'
+    DIR_PATH = '/home/zsong/working/data/glove'
+    with open(os.path.join(DIR_PATH, wiki_fname)) as glove:
         for line in glove:
             values = line.split()
             # word, vector = values[0], np.asarray(values[1:], dtype='float32')
@@ -116,21 +122,43 @@ def load_glove():
             vector = [float(i) for i in vector]
             embeddings[word] = vector
     print("Gloved is loaded.")
-    with open('glove.txt', 'w') as result:
+    with open(glove_name, 'w') as result:
         json.dump(embeddings, result)
-    print("Glove word vectors are saved as 'glove.txt'.")
+    print("Glove word vectors are saved as {}.".format(glove_name))
          
+def pad_comment(tokenized_sequence):
+    '''
+    This function pads a comment that is less than 4856 words with non-words placeholders.
+    '''
+    MAX_LENGTH = 4856
+    pad_counts = MAX_LENGTH - len(tokenized_sequence)
+    output = tokenized_sequence + ['ni_zhao_bu_dao_de'] * pad_counts
+    return output
+
 def prepare_sequence(comment, glove):
     '''
     This function converts a sequence of words into a list of word vectors.
     The output is contained in a PyTorch variable.
     '''
     word_list = text_to_word_list(comment)
+    # word_list = pad_comment(word_list) # padding
     sequence = [get_word_vectors(word, glove) for word in word_list]
     # sequence = np.array(sequence)
     # tensor = torch.from_numpy(sequence)
-    tensor = torch.DoubleTensor(sequence)
+    tensor = torch.FloatTensor(sequence)
+    # tensor = torch.DoubleTensor(sequence)
     return autograd.Variable(tensor)
+
+def prepare_label_vector(label):
+    '''
+    This function specifies input format.
+    '''
+    tensor = [0] * 9
+    tensor[label] = 1
+    tensor = torch.LongTensor([label])
+    # tensor = torch.LongTensor(label)
+    return autograd.Variable(tensor)
+    
 
 def get_word_vectors(word, glove):
     '''
@@ -143,7 +171,7 @@ def get_word_vectors(word, glove):
         return glove[word]
     else:
         # return autograd.Variable(torch.from_numpy(np.zeros(300)))
-        return [0.0 * 300]
+        return [0.0] * 300
 
 def training(train_data, vectors):
     '''
@@ -153,40 +181,43 @@ def training(train_data, vectors):
     model = LSTMText2Word(EMBEDDING_DIM, HIDDEN_DIM, OUTPUT_DIM, LAYER_NUM)
     print("Print LSTM architecture:")
     print(model)
-    loss_function = nn.MSELoss()
+    # loss_function = nn.CrossEntropyLoss()
+    loss_function = nn.NLLLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.1)
     label_scores = 0
     print('Initialize label score', label_scores)
-    for epoch in range(100):
+    for epoch in range(2):
+        loss = 0
+        i = 0
         for sequence, label in train_data:
-            print("Epoch:", epoch) 
             # Step 1. Remember that Pytorch accumulates gradients.
             # We need to clear them out before each instance
             model.zero_grad()
             # Also, we need to clear out the hidden state of the LSTM,
             # detaching it from its history on the last instance.
-            model.hidden = model.init_hidden()
 
-            print("Starting step 2:")
+            model.hidden = model.init_hidden()
             # Step 2. Get our inputs ready for the network.
             sequence_input = prepare_sequence(sequence, vectors) 
           
             # Step 3. Run our forward pass.
-            print("Starting step 3:")
-            print(model(sequence_input))
-            print((model(sequence_input)).size())
+            # print(model(sequence_input))
+            # print((model(sequence_input)).size())
             predicted_label = model(sequence_input)
 
-            print("Starting step 4:")
             # Step 4. Compute the loss, gradients, and update the parameters by
-            #  calling optimizer.step() 
-            loss = loss_function(predicted_label, label) # need to convert predicted label from Variable to a label
+            #  calling optimizer.step()
+            label_vector = prepare_label_vector(label)
+            temp = nn.LogSoftmax(predicted_label)
+            loss = loss_function(predicted_label, label_vector) # need to convert predicted label from Variable to a label
             loss.backward()
             optimizer.step()
+            i += 1
+        if (i + 1) % 100 == 0:
+            print('Epoch [%d / %d], Loss: %.4f' %(epoch + 1, epoch, loss.data[0]))
     print("Training is done.")
-    print("The trained perceptron:", optimizer)
     torch.save(model, 'model.pkl')
-    print("The model is saved as 'model.pkl'.")
+    print("The model is saved as 'model_wiki.pkl'.")
 
 def cross_validation():
     '''
@@ -209,6 +240,10 @@ if __name__ == "__main__":
     # load_json(label_to_index, DATA_PATH)
     # load_glove() 
     data_tuple = json.load(open('training_tuples.txt'))
-    vectors = json.load(open('glove.txt'))
+    ########################################## Loading different glove embeddings
+    # vectors = json.load(open('glove.txt'))
+    vectors = json.load(open('glove_wiki.txt')) # test with short corpus
+    # vectors = [] # test
+    ##########################################
     training(data_tuple, vectors)
 
