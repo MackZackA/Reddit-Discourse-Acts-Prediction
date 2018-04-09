@@ -1,4 +1,5 @@
 import nltk
+import sklearn
 import torch
 import torch.autograd as autograd
 import torch.nn as nn
@@ -9,7 +10,7 @@ import numpy as np
 import os
 from nltk.stem.wordnet import WordNetLemmatizer
 from nltk.tokenize import RegexpTokenizer
-
+from sklearn.model_selection import train_test_split
 
 torch.manual_seed(1)
 # convert it to LSTMText2Word
@@ -184,12 +185,15 @@ def training(train_data, vectors):
     # loss_function = nn.CrossEntropyLoss()
     loss_function = nn.NLLLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.1)
+    training_epochs = 2
     label_scores = 0
     print('Initialize label score', label_scores)
-    for epoch in range(2):
+    print("Start training:")
+    for epoch in range(training_epochs):
         loss = 0
         i = 0
         for sequence, label in train_data:
+            print("Training example {}".format(i + 1))
             # Step 1. Remember that Pytorch accumulates gradients.
             # We need to clear them out before each instance
             model.zero_grad()
@@ -213,17 +217,48 @@ def training(train_data, vectors):
             loss.backward()
             optimizer.step()
             i += 1
-        if (i + 1) % 100 == 0:
-            print('Epoch [%d / %d], Loss: %.4f' %(epoch + 1, epoch, loss.data[0]))
+            if (i + 1) % 100 == 0:
+                print('\nEpoch [%d / %d], Loss: %.4f' %(epoch + 1, training_epochs, loss.data[0]))
     print("Training is done.")
-    torch.save(model, 'model.pkl')
+    torch.save(model, 'model_glove_5000.pkl')
+    # torch.save(model.state_dict(), 'model.pkl') 
     print("The model is saved as 'model_wiki.pkl'.")
 
-def cross_validation():
+def separate_data(data_tuple):
+    data, labels = zip(* data_tuple)
+    X_train, X_test, y_train, y_test = train_test_split(data, labels, train_size=0.9, test_size=0.1, random_state=56)
+    training = list(zip(X_train, y_train))
+    test = list(zip(X_test, y_test))
+    print("The data is split.")
+    with open('train.txt', 'w') as out_file1:
+        json.dump(training, out_file1)
+    with open('test.txt', 'w') as out_file2:
+        json.dump(test, out_file2)
+    print("The training and test sets are saved as 'train.txt' and 'test.txt'.")
+
+def testing(test_data, vectors):
     '''
     model = torch.load('model.pkl')
     '''
-    pass
+    model = torch.load('model_glove_5000.pkl')
+    correct = 0
+    total = 0
+    loss_function = nn.NLLLoss()
+    # prediction_result = []
+    for sequence, label in test_data:
+        sequence_input = prepare_sequence(sequence, vectors)
+        output = model(sequence_input)
+        _, prediction = torch.max(output.data, 1)
+        total += prepare_label_vector(label).size(0)
+        label_vector = prepare_label_vector(label)
+        # predicted_label = label_to_index[np.argmax(prediction)]
+        # golden_rule_label = label_to_index[np.argmax(label_vector)]
+        # prediction_result.append((predicted_label, golden_rule_label))
+        correct += prediction.eq(label_vector.data.view_as(prediction)).sum()
+    print('Accuracy of model trained on 5000 examples on 1000 test labels: %d %%' % (100 * correct / total))
+    # with open('result.txt', 'w') as cf:
+    #    json.dump(prediction_result, cf)
+
 
 data_tuple = []
 DATA_PATH = "/home/zsong/working/my_trial_DIR/post_df_parent_text_unified.json" 
@@ -240,10 +275,17 @@ if __name__ == "__main__":
     # load_json(label_to_index, DATA_PATH)
     # load_glove() 
     data_tuple = json.load(open('training_tuples.txt'))
+    # separate_data(data_tuple)
+    # train = json.load(open('train.txt'))
+    # test = json.load(open('test.txt'))
+    train = data_tuple[: 5000]
+    test = data_tuple[5000 : 6000]
     ########################################## Loading different glove embeddings
-    # vectors = json.load(open('glove.txt'))
-    vectors = json.load(open('glove_wiki.txt')) # test with short corpus
+    vectors = json.load(open('glove.txt'))
+    # vectors = json.load(open('glove_wiki.txt')) # test with short corpus
     # vectors = [] # test
     ##########################################
-    training(data_tuple, vectors)
+    # training(train, vectors)
+    testing(test, vectors)
+
 
