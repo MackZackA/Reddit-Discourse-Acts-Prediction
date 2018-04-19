@@ -16,19 +16,17 @@ torch.manual_seed(1)
 # convert it to LSTMText2Word
 class LSTMText2Word(nn.Module):
 
-    def __init__(self, embedding_dim, hidden_dim, labelset_size, lstm_layers, training_epochs, batch_size, pack_dim):
+    def __init__(self, embedding_dim, hidden_dim, labelset_size, lstm_layers):
         super(LSTMText2Word, self).__init__()
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
         self.output_dim = labelset_size
         self.lstm_layers = lstm_layers
-        self.training_epochs = training_epochs
-        self.batch_size = batch_size
         # The LSTM takes word embeddings as inputs, and outputs hidden states
         # with dimensionality hidden_dim.
         self.lstm = nn.LSTM(self.embedding_dim, self.hidden_dim, self.lstm_layers, \
                             bias=False, batch_first=False, dropout=0, bidirectional=False)
-        self.pack_dim = pack_dim
+
         # The linear layer that maps from hidden state space to label space
         self.hidden2label = nn.Linear(self.hidden_dim, self.output_dim)
         self.hidden = self.init_hidden()
@@ -39,8 +37,8 @@ class LSTMText2Word(nn.Module):
         # why they have this dimensionality.
         # The axes semantics are (num_layers, minibatch_size, hidden_dim)
         
-        return (autograd.Variable(torch.zeros(self.lstm_layers, self.batch_size, self.hidden_dim)),
-               autograd.Variable(torch.zeros(self.lstm_layers, self.batch_size, self.hidden_dim)))
+        return (autograd.Variable(torch.zeros(self.lstm_layers, 1, self.hidden_dim)),
+               autograd.Variable(torch.zeros(self.lstm_layers, 1, self.hidden_dim)))
         # return (autograd.Variable(torch.zeros(self.lstm_layers, 1, self.hidden_dim).double()), 
         #        autograd.Variable(torch.zeros(self.lstm_layers, 1, self.hidden_dim).double()))
 
@@ -48,7 +46,7 @@ class LSTMText2Word(nn.Module):
         '''
         embeds = self.word_embeddings(sentence)
         lstm_out, self.hidden = self.lstm(
-            embeds.view(len(sentence), 1, -1), self.hiddenq)
+            embeds.view(len(sentence), 1, -1), self.hidden)
         label_space = self.hidden2tag(lstm_out.view(len(sentence), -1))
         label_scores = F.log_softmax(label_space, dim=1)
         return label_scores
@@ -58,25 +56,17 @@ class LSTMText2Word(nn.Module):
         # print(sequence.view(len(sequence), 1, -1).size())
         # lstm_out, self.hidden = self.lstm(sequence.view(len(sequence), 1, -1), self.hidden)
         # -1 means inferring from other dimensions
-
-        # lstm_out, self.hidden = self.lstm(sequence.view(len(sequence), self.batch_size, -1))
-        lstm_out, self.hidden = self.lstm(sequence)
-        unpacked, unpacked_sequence_lengths = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first=True)
-        # get the last timestep
-        unpacked_sequence_lengths = torch.FloatTensor(unpacked_sequence_lengths)
-        idx = (unpacked_sequence_lengths - torch.ones(unpacked.size(0))).view(-1, 1).expand(unpacked.size(0), unpacked.size(2)).unsqueeze(1)
-        idx = autograd.Variable(idx.long())
-        decoded = unpacked.gather(1, idx).squeeze() # batch size * hidden dimension
-        # lstm_last = lstm_out[-1, :, :]
+        lstm_out, self.hidden = self.lstm(sequence.view(len(sequence), 1, -1))
+        lstm_last = lstm_out[-1, :, :]
         # print("Print sliced lstm output size:", lstm_last.size())
-        label_space = self.hidden2label(decoded.view(self.batch_size, -1))
+        label_space = self.hidden2label(lstm_last.view(1, -1))
         # print("Size of label space:", label_space.size())
-        predicted_labels = F.log_softmax(label_space, dim=1)
+        predicted_label = F.log_softmax(label_space, dim=1)
         # print("Print predicted label:")
         # print(predicted_label)
         # print("Print predicted label size:")
         # print(predicted_label.size())
-        return predicted_labels 
+        return predicted_label 
 
 def load_json(label_to_index, path):
     '''
@@ -137,12 +127,13 @@ def load_glove():
         json.dump(embeddings, result)
     print("Glove word vectors are saved as {}.".format(glove_name))
          
-def pad_nonwords(longest_len, sorted_tokenized_sequence):
+def pad_comment(tokenized_sequence):
     '''
     This function pads a comment that is less than 4856 words with non-words placeholders.
     '''
-    pad_counts = longest_len - len(sorted_tokenized_sequence)
-    output = sorted_tokenized_sequence + ['ni_zhao_bu_dao_de'] * pad_counts
+    MAX_LENGTH = 4856
+    pad_counts = MAX_LENGTH - len(tokenized_sequence)
+    output = tokenized_sequence + ['ni_zhao_bu_dao_de'] * pad_counts
     return output
 
 def prepare_sequence(comment, glove):
@@ -150,16 +141,14 @@ def prepare_sequence(comment, glove):
     This function converts a sequence of words into a list of word vectors.
     The output is contained in a PyTorch variable.
     '''
-    word_list = comment
-    # word_list = text_to_word_list(comment)
+    word_list = text_to_word_list(comment)
     # word_list = pad_comment(word_list) # padding
     sequence = [get_word_vectors(word, glove) for word in word_list]
     # sequence = np.array(sequence)
     # tensor = torch.from_numpy(sequence)
     tensor = torch.FloatTensor(sequence)
     # tensor = torch.DoubleTensor(sequence)
-    # return autograd.Variable(tensor)
-    return tensor
+    return autograd.Variable(tensor)
 
 def prepare_label_vector(label):
     '''
@@ -167,10 +156,9 @@ def prepare_label_vector(label):
     '''
     tensor = [0] * 9
     tensor[label] = 1
-    tensor = torch.LongTensor(tensor)
+    tensor = torch.LongTensor([label])
     # tensor = torch.LongTensor(label)
-    # return autograd.Variable(tensor)
-    return tensor
+    return autograd.Variable(tensor)
     
 
 def get_word_vectors(word, glove):
@@ -186,53 +174,25 @@ def get_word_vectors(word, glove):
         # return autograd.Variable(torch.from_numpy(np.zeros(300)))
         return [0.0] * 300
 
-def batch_processing(chunk_tuple, batch_size):
-    '''
-    This function takes the input and returns a packed padded sequence of data and a list of their corresponding labels.
-    The input is a chunk of data tuples (sequence, label) with the size batch_size.
-    '''
-    strings, labels = zip(*chunk_tuple)
-    word_lists = [text_to_word_list(string) for string in strings]
-    tuples = zip(word_lists, labels)
-    # sorted_by_length = tuples.sort(key=lambda t: len(t[0]), reverse=True)
-    sorted_by_length = sorted(tuples, key=lambda t: len(t[0]), reverse=True)
-    word_lists, labels = zip(*sorted_by_length)
-    sequence_lengths = [len(w_list) for w_list in word_lists]
-    longest_length = len(word_lists[0])
-    word_lists = [pad_nonwords(longest_length, w_list) for w_list in word_lists]
-    ###
-    # sequence_inputs = torch.zeros((batch_size, longest_length, 300))
-    sequence_inputs = [prepare_sequence(w_list, vectors) for w_list in word_lists] 
-    sequence_inputs = torch.stack(sequence_inputs, dim=0)
-    sequence_inputs = autograd.Variable(sequence_inputs)
-    ###
-    # The size of sequence inputs should be batch_size * longest_length * num_embeddings
-    pack = nn.utils.rnn.pack_padded_sequence(sequence_inputs, sequence_lengths, batch_first=True)
-    # labels = [prepare_label_vector(label) for label in labels]
-    # labels = autograd.Variable(torch.stack(labels, dim=0))
-    labels = autograd.Variable(torch.LongTensor(labels))
-    return pack, labels
-
 def training(train_data, vectors):
     '''
     This function replicates the training process below.
     There is no return value. The model will be saved with torch.save() and later loaded with torch.load(). 
     '''
-    model = LSTMText2Word(EMBEDDING_DIM, HIDDEN_DIM, OUTPUT_DIM, LAYER_NUM, EPOCHS, BATCH_SIZE, PACK_DIM)
+    model = LSTMText2Word(EMBEDDING_DIM, HIDDEN_DIM, OUTPUT_DIM, LAYER_NUM)
     print("Print LSTM architecture:")
     print(model)
     # loss_function = nn.CrossEntropyLoss()
-    loss_function = nn.NLLLoss(reduce=True)
+    loss_function = nn.NLLLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.1)
-    training_epochs = model.training_epochs
+    training_epochs = 2
     label_scores = 0
     print('Initialize label score', label_scores)
     print("Start training:")
     for epoch in range(training_epochs):
         loss = 0
         i = 0
-        for idx in range(0, len(train_data), model.batch_size):
-            
+        for sequence, label in train_data:
             print("Training example {}".format(i + 1))
             # Step 1. Remember that Pytorch accumulates gradients.
             # We need to clear them out before each instance
@@ -242,31 +202,27 @@ def training(train_data, vectors):
 
             model.hidden = model.init_hidden()
             # Step 2. Get our inputs ready for the network.
-            chunks = train_data[idx : idx + model.batch_size]
-            sequence_pack, labels = batch_processing(chunks, len(chunks)) 
+            sequence_input = prepare_sequence(sequence, vectors) 
+          
             # Step 3. Run our forward pass.
             # print(model(sequence_input))
             # print((model(sequence_input)).size())
-            predicted_labels = model(sequence_pack)
+            predicted_label = model(sequence_input)
 
             # Step 4. Compute the loss, gradients, and update the parameters by
             #  calling optimizer.step()
-            # temp = nn.LogSoftmax(predicted_labels)
-            # print('Print first element of predicted_labels:', predicted_labels[0])
-            # print('Print first element of labels:', labels[0])
-            # print('The size of predicted_labels:', predicted_labels.size())
-            # print('The size of labels:', labels.size())
-            
-            loss = loss_function(predicted_labels, labels) # need to convert predicted label from Variable to a label
+            label_vector = prepare_label_vector(label)
+            temp = nn.LogSoftmax(predicted_label)
+            loss = loss_function(predicted_label, label_vector) # need to convert predicted label from Variable to a label
             loss.backward()
             optimizer.step()
-            i += model.batch_size
+            i += 1
             if (i + 1) % 100 == 0:
                 print('\nEpoch [%d / %d], Loss: %.4f' %(epoch + 1, training_epochs, loss.data[0]))
     print("Training is done.")
-    torch.save(model.state_dict(), 'model_batch_200_glove_1000.pkl')
+    torch.save(model, 'model_glove_5000.pkl')
     # torch.save(model.state_dict(), 'model.pkl') 
-    print("The model is saved as 'model_batch_200_glove_1000.pkl'.")
+    print("The model is saved as 'model_wiki.pkl'.")
 
 def separate_data(data_tuple):
     data, labels = zip(* data_tuple)
@@ -281,22 +237,14 @@ def separate_data(data_tuple):
     print("The training and test sets are saved as 'train.txt' and 'test.txt'.")
 
 def testing(test_data, vectors):
-    # model = torch.load('model_glove_5000.pkl')
-    model = LSTMText2Word(EMBEDDING_DIM, HIDDEN_DIM, OUTPUT_DIM, LAYER_NUM, EPOCHS, BATCH_SIZE, PACK_DIM)
-    model.load_state_dict(torch.load('model_batch_200_glove_1000.pkl'))
+    '''
+    model = torch.load('model.pkl')
+    '''
+    model = torch.load('model_glove_5000.pkl')
     correct = 0
     total = 0
     loss_function = nn.NLLLoss()
     # prediction_result = []
-    for idx in range(0, len(test_data), model.batch_size):
-        chunks = test_data[idx : idx + model.batch_size]
-        sequence_pack, labels = batch_processing(chunks, model.batch_size)
-        predicted_labels = model(sequence_pack)
-        _, prediction = torch.max(predicted_labels.data, 1)
-        total += labels.size(0)
-        correct += prediction.eq(labels.data.view_as(prediction)).sum()
-
-    '''
     for sequence, label in test_data:
         sequence_input = prepare_sequence(sequence, vectors)
         output = model(sequence_input)
@@ -307,8 +255,7 @@ def testing(test_data, vectors):
         # golden_rule_label = label_to_index[np.argmax(label_vector)]
         # prediction_result.append((predicted_label, golden_rule_label))
         correct += prediction.eq(label_vector.data.view_as(prediction)).sum()
-    '''
-    print('Accuracy of model trained on 1000 comments and test on 100 comments: %d %%' % (100 * correct / total))
+    print('Accuracy of model trained on 5000 examples on 1000 test labels: %d %%' % (100 * correct / total))
     # with open('result.txt', 'w') as cf:
     #    json.dump(prediction_result, cf)
 
@@ -323,9 +270,6 @@ EMBEDDING_DIM = 300
 HIDDEN_DIM = 300
 OUTPUT_DIM = len(label_to_index)
 LAYER_NUM = 2
-EPOCHS = 2
-BATCH_SIZE = 200
-PACK_DIM = 1
 
 if __name__ == "__main__":
     # load_json(label_to_index, DATA_PATH)
@@ -334,14 +278,14 @@ if __name__ == "__main__":
     # separate_data(data_tuple)
     # train = json.load(open('train.txt'))
     # test = json.load(open('test.txt'))
-    train = data_tuple[: 1000]
-    test = data_tuple[1000 : 1200]
+    train = data_tuple[: 5000]
+    test = data_tuple[5000 : 6000]
     ########################################## Loading different glove embeddings
     vectors = json.load(open('glove.txt'))
     # vectors = json.load(open('glove_wiki.txt')) # test with short corpus
     # vectors = [] # test
     ##########################################
-    training(train, vectors)
+    # training(train, vectors)
     testing(test, vectors)
 
 
