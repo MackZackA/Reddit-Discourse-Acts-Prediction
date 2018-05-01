@@ -8,6 +8,7 @@ import torch.optim as optim
 import json
 import numpy as np
 import os
+import random
 from nltk.stem.wordnet import WordNetLemmatizer
 from nltk.tokenize import RegexpTokenizer
 from sklearn.model_selection import train_test_split
@@ -92,7 +93,8 @@ def load_json(label_to_index, path):
             # body = text_to_word_list(body)
             majority_type = data[id]['majority_type']
             majority_type = label_to_index[majority_type]
-            data_tuple.append((body, majority_type))
+            tup = tuple([body, majority_type])
+            data_tuple.append(tup)
     print("Data file is loaded.")
     with open('training_tuples.txt', 'w') as result:
         json.dump(data_tuple, result)
@@ -104,6 +106,8 @@ def text_to_word_list(text):
     It cleans the raw comment from 'body' feature into a list 
     of tokenized, lemmatized, lower-case, no-punctuation words.
     '''
+    if len(text) == 0:
+        text = 'ni_zhao_bu_dao_de'
     # word_list = tokenizer.tokenize(text)
     word_list = nltk.word_tokenize(text)
     word_list = [lemmatizer.lemmatize(word.lower()) if word != 'ni_zhao_bu_dao_de' else word for word in word_list]
@@ -213,6 +217,17 @@ def batch_processing(chunk_tuple, batch_size):
     labels = autograd.Variable(torch.LongTensor(labels))
     return pack, labels
 
+def clean_data(data_tuple):
+    cleaned_list = []
+    for idx in range(len(data_tuple)):
+        dt = data_tuple[idx]
+        if len(dt[0]) != 0 and not dt[0].isspace():
+            cleaned_list.append(dt)
+    random.shuffle(cleaned_list)
+    with open('training_tuples.txt', 'w') as result:
+        json.dump(cleaned_list, result)
+    print("Data is and cleaned and shuffled.")
+
 def training(train_data, vectors):
     '''
     This function replicates the training process below.
@@ -233,7 +248,7 @@ def training(train_data, vectors):
         i = 0
         for idx in range(0, len(train_data), model.batch_size):
             
-            print("Training example {}".format(i + 1))
+            print("Training example {}".format(i))
             # Step 1. Remember that Pytorch accumulates gradients.
             # We need to clear them out before each instance
             model.zero_grad()
@@ -261,12 +276,12 @@ def training(train_data, vectors):
             loss.backward()
             optimizer.step()
             i += model.batch_size
-            if (i + 1) % 100 == 0:
+            if i % 100 == 0:
                 print('\nEpoch [%d / %d], Loss: %.4f' %(epoch + 1, training_epochs, loss.data[0]))
     print("Training is done.")
-    torch.save(model.state_dict(), 'model_batch_200_glove_1000.pkl')
+    torch.save(model.state_dict(), 'model_batch_100_glove_100000_1_epoch_01_lr_qsub.pkl')
     # torch.save(model.state_dict(), 'model.pkl') 
-    print("The model is saved as 'model_batch_200_glove_1000.pkl'.")
+    print("The model is saved as 'model_batch_100_glove_100000_1_epoch_01_lr_qsub.pkl'.")
 
 def separate_data(data_tuple):
     data, labels = zip(* data_tuple)
@@ -283,11 +298,12 @@ def separate_data(data_tuple):
 def testing(test_data, vectors):
     # model = torch.load('model_glove_5000.pkl')
     model = LSTMText2Word(EMBEDDING_DIM, HIDDEN_DIM, OUTPUT_DIM, LAYER_NUM, EPOCHS, BATCH_SIZE, PACK_DIM)
-    model.load_state_dict(torch.load('model_batch_200_glove_1000.pkl'))
+    model.load_state_dict(torch.load('model_batch_100_glove_100000_1_epoch_01_lr_qsub.pkl'))
     correct = 0
     total = 0
     loss_function = nn.NLLLoss()
     # prediction_result = []
+    i = 0
     for idx in range(0, len(test_data), model.batch_size):
         chunks = test_data[idx : idx + model.batch_size]
         sequence_pack, labels = batch_processing(chunks, model.batch_size)
@@ -295,20 +311,12 @@ def testing(test_data, vectors):
         _, prediction = torch.max(predicted_labels.data, 1)
         total += labels.size(0)
         correct += prediction.eq(labels.data.view_as(prediction)).sum()
+        loss = loss_function(predicted_labels, labels)
+        i += model.batch_size
+        if i % 1000 == 0:                 
+            print('Loss: %.4f' %(loss.data[0])) 
 
-    '''
-    for sequence, label in test_data:
-        sequence_input = prepare_sequence(sequence, vectors)
-        output = model(sequence_input)
-        _, prediction = torch.max(output.data, 1)
-        total += prepare_label_vector(label).size(0)
-        label_vector = prepare_label_vector(label)
-        # predicted_label = label_to_index[np.argmax(prediction)]
-        # golden_rule_label = label_to_index[np.argmax(label_vector)]
-        # prediction_result.append((predicted_label, golden_rule_label))
-        correct += prediction.eq(label_vector.data.view_as(prediction)).sum()
-    '''
-    print('Accuracy of model trained on 1000 comments and test on 100 comments: %d %%' % (100 * correct / total))
+    print('Accuracy of model trained on 100000 comments and test on 1000 comments: %d %%' % (100 * correct / total))
     # with open('result.txt', 'w') as cf:
     #    json.dump(prediction_result, cf)
 
@@ -323,25 +331,30 @@ EMBEDDING_DIM = 300
 HIDDEN_DIM = 300
 OUTPUT_DIM = len(label_to_index)
 LAYER_NUM = 2
-EPOCHS = 2
-BATCH_SIZE = 200
+EPOCHS = 1
+BATCH_SIZE = 100
 PACK_DIM = 1
 
 if __name__ == "__main__":
     # load_json(label_to_index, DATA_PATH)
     # load_glove() 
+    # altogether 101488 examples
     data_tuple = json.load(open('training_tuples.txt'))
+    print("Number of Training Examples: {}".format(len(data_tuple)))
+    # clean_data(data_tuple)
+    # data_tuple = json.load(open('training_tuples.txt'))
+    # print("Number of cleaned data points: {}".format(len(data_tuple)))
     # separate_data(data_tuple)
     # train = json.load(open('train.txt'))
-    # test = json.load(open('test.txt'))
-    train = data_tuple[: 1000]
-    test = data_tuple[1000 : 1200]
+    # test = json.load(open('test.txt')) 
+    train = data_tuple[: 100000]
+    # test = data_tuple[2000: 3000]
     ########################################## Loading different glove embeddings
     vectors = json.load(open('glove.txt'))
     # vectors = json.load(open('glove_wiki.txt')) # test with short corpus
     # vectors = [] # test
     ##########################################
     training(train, vectors)
-    testing(test, vectors)
+    # testing(test, vectors)
 
 
