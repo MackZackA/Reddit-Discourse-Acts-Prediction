@@ -223,7 +223,7 @@ def clean_data(data_tuple):
         dt = data_tuple[idx]
         if len(dt[0]) != 0 and not dt[0].isspace():
             cleaned_list.append(dt)
-    random.shuffle(cleaned_list)
+    random.Random(0).shuffle(cleaned_list)
     with open('training_tuples.txt', 'w') as result:
         json.dump(cleaned_list, result)
     print("Data is and cleaned and shuffled.")
@@ -279,9 +279,9 @@ def training(train_data, vectors):
             if i % 100 == 0:
                 print('\nEpoch [%d / %d], Loss: %.4f' %(epoch + 1, training_epochs, loss.data[0]))
     print("Training is done.")
-    torch.save(model.state_dict(), 'model_batch_100_glove_100000_1_epoch_01_lr_qsub.pkl')
+    torch.save(model.state_dict(), 'model_batch_100_glove_100000_5_epochs_01_lr_qsub.pkl')
     # torch.save(model.state_dict(), 'model.pkl') 
-    print("The model is saved as 'model_batch_100_glove_100000_1_epoch_01_lr_qsub.pkl'.")
+    print("The model is saved as 'model_batch_100_glove_100000_5_epochs_01_lr_qsub.pkl'.")
 
 def separate_data(data_tuple):
     data, labels = zip(* data_tuple)
@@ -298,25 +298,41 @@ def separate_data(data_tuple):
 def testing(test_data, vectors):
     # model = torch.load('model_glove_5000.pkl')
     model = LSTMText2Word(EMBEDDING_DIM, HIDDEN_DIM, OUTPUT_DIM, LAYER_NUM, EPOCHS, BATCH_SIZE, PACK_DIM)
-    model.load_state_dict(torch.load('model_batch_100_glove_100000_1_epoch_01_lr_qsub.pkl'))
+    model.load_state_dict(torch.load('lol.pkl'))
     correct = 0
+    total_loss = 0
     total = 0
+    data_size = 100000
     loss_function = nn.NLLLoss()
+    ntokens = model.output_dim
     # prediction_result = []
     i = 0
     for idx in range(0, len(test_data), model.batch_size):
         chunks = test_data[idx : idx + model.batch_size]
         sequence_pack, labels = batch_processing(chunks, model.batch_size)
         predicted_labels = model(sequence_pack)
+        ###
+        # total_loss += data_size * loss_function(predicted_labels, labels)
+        # total += labels.size(0)
+        ###
         _, prediction = torch.max(predicted_labels.data, 1)
         total += labels.size(0)
         correct += prediction.eq(labels.data.view_as(prediction)).sum()
+        # print('The prediction: {}, Number of correct predictions: {}, Number of test examples: {}'.format(prediction, correct, total))
+        ###
+        '''
+        _, prediction = torch.max(predicted_labels.data, 1)
+        total += labels.size(0)
+        correct += prediction.eq(labels.data.view_as(prediction)).sum()
+        '''
         loss = loss_function(predicted_labels, labels)
         i += model.batch_size
         if i % 1000 == 0:                 
-            print('Loss: %.4f' %(loss.data[0])) 
-
-    print('Accuracy of model trained on 100000 comments and test on 1000 comments: %d %%' % (100 * correct / total))
+            print('Loss: %.4f' %(loss.data[0]))
+            # print('Loss: %.4f' %(total_loss.data[0]))
+    # print('Accuracy of model trained on 100000 comments and test on 1000 comments: total_loss / total = {}'.format(1.0 * total_loss / total))
+    print("Getting {} correct out of {} examples".format(correct, total))
+    print('Accuracy of model trained on 100000 comments and test on 1000 comments: %d %%' % (100.0 * correct / total))
     # with open('result.txt', 'w') as cf:
     #    json.dump(prediction_result, cf)
 
@@ -331,7 +347,7 @@ EMBEDDING_DIM = 300
 HIDDEN_DIM = 300
 OUTPUT_DIM = len(label_to_index)
 LAYER_NUM = 2
-EPOCHS = 1
+EPOCHS = 5
 BATCH_SIZE = 100
 PACK_DIM = 1
 
@@ -348,7 +364,8 @@ if __name__ == "__main__":
     # train = json.load(open('train.txt'))
     # test = json.load(open('test.txt')) 
     train = data_tuple[: 100000]
-    # test = data_tuple[2000: 3000]
+    # test = data_tuple[40000: 50000][:]
+    # random.Random(0).shuffle(test)
     ########################################## Loading different glove embeddings
     vectors = json.load(open('glove.txt'))
     # vectors = json.load(open('glove_wiki.txt')) # test with short corpus
@@ -356,5 +373,4 @@ if __name__ == "__main__":
     ##########################################
     training(train, vectors)
     # testing(test, vectors)
-
 
